@@ -2,6 +2,7 @@ import { goodfellas, popular } from '../../test/fixtures/movies.js'
 import { roles } from '../../test/fixtures/people.js'
 import { toNativeTypes } from '../utils.js'
 import NotFoundError from '../errors/not-found.error.js'
+import { int, isInt } from 'neo4j-driver'
 
 // TODO: Import the `int` function from neo4j-driver
 
@@ -39,12 +40,34 @@ export default class MovieService {
    */
   // tag::all[]
   async all(sort = 'title', order = 'ASC', limit = 6, skip = 0, userId = undefined) {
-    // TODO: Open an Session
-    // TODO: Execute a query in a new Read Transaction
-    // TODO: Get a list of Movies from the Result
-    // TODO: Close the session
+    // Open an Session
+    const session = this.driver.session()
 
-    return popular
+    // Execute a query in a new Read Transaction
+    const res = await session.readTransaction(async tx => {
+      // Get an array of IDs for the User's favorite movies
+      const favorites = await this.getUserFavorites(tx, userId)
+
+      return tx.run(`
+        MATCH (m:Movie)
+        WHERE m.${sort} IS NOT NULL
+        RETURN m {
+          .*,
+          favorite: m.tmdbId IN $favorites
+        } AS movie
+        ORDER BY m.${sort} ${order}
+        SKIP $skip
+        LIMIT $limit
+      `, { skip: int(skip), limit: int(limit), favorites })
+    })
+
+    // Get a list of Movies from the Result
+    const movies = res.records.map(row => toNativeTypes(row.get('movie')))
+
+    // Close the session
+    await session.close()
+
+    return movies
   }
   // end::all[]
 
@@ -203,6 +226,17 @@ export default class MovieService {
    */
   // tag::getUserFavorites[]
   async getUserFavorites(tx, userId) {
+
+    if ( userId !== undefined ) {
+      const res = await tx.run(`
+        MATCH (u:User {userId: $userId})-[r:HAS_FAVORITE]->(m:Movie)
+        RETURN m.tmdbId AS id
+        `,
+      { userId })
+
+      return res.records.map(row => row.get('id'))
+    }
+
     return []
   }
   // end::getUserFavorites[]
